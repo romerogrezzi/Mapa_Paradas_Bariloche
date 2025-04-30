@@ -7,76 +7,97 @@
   <!-- Leaflet core -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <!-- Leaflet‑search -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-search/dist/leaflet-search.min.css" />
-  <script src="https://unpkg.com/leaflet-search/dist/leaflet-search.min.js"></script>
+  <!-- Leaflet‑search (buscador de paradas) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-search@3.0.2/dist/leaflet-search.min.css"/>
+  <script src="https://unpkg.com/leaflet-search@3.0.2/dist/leaflet-search.min.js"></script>
+
   <style>
-    html,body,#map{height:100%;margin:0;padding:0}
-    .leaflet-control-search{max-width:220px}
+    html,body,#map{height:100%;margin:0}
+    .leaflet-popup-content{font-size:.9rem;line-height:1.3}
   </style>
 </head>
 <body>
 <div id="map"></div>
+
 <script>
-/********************************************
- * Ajustá sólo estos 3 nombres si cambiás   *
+/*******************************************
+ * Sólo tocá estos 3 nombres si cambiás los archivos *
  *******************************************/
-const ALL_STOPS_GEOJSON = 'paradas.geojson';   // desde "Paradas TUP.kmz"
-const SHELTER_STOPS_GEOJSON = 'garitas.geojson'; // desde "Garitas TUP.kmz"
-const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/e/TU_FORM_ID/viewform?usp=pp_url&entry.123456789=';
+const ALL_STOPS_GEOJSON     = 'paradas.geojson';  // desde "Paradas TUP.kmz"
+const SHELTER_STOPS_GEOJSON = 'garitas.geojson';  // desde "Garitas TUP.kmz"
+// URL al Google Form (en modo viewform, no edit) + parámetro pre‑fill del primer campo
+const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/1t6WS4Ll4cdEmpBbTORrYD2Rnblg4t3D3s8xUq1gqgGA/viewform?usp=pp_url&entry.123456789=';
 
 // 1. Mapa base centrado en Bariloche
 const map = L.map('map').setView([-41.1335,-71.3103],13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-  attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);
+  attribution:'© OpenStreetMap contributors',
+  maxZoom:19
+}).addTo(map);
 
-// 2. Cargar las dos capas GeoJSON
-const allStopsLayer = L.layerGroup();
+// 2. Capas vacías donde pondremos los datos
+const allStopsLayer     = L.layerGroup();
 const shelterStopsLayer = L.layerGroup();
-const layerControl = L.control.layers(null, {
+L.control.layers(null, {
   'Todas las paradas': allStopsLayer,
   'Paradas con refugio': shelterStopsLayer
 }).addTo(map);
 
-function styleStop(color){return {
-  radius:6,fillColor:color,color:'#fff',weight:1,fillOpacity:0.9
-};}
-
-function addGeoLayer(url,layer,color){
- fetch(url)
-  .then(r=>r.json())
-  .then(g=>{
-   const gj=L.geoJSON(g,{
-    pointToLayer:(f,ll)=>L.circleMarker(ll,styleStop(color)),
-    onEachFeature:(f,l)=>{
-      const p=f.properties||{};
-      const id=p.id||'';
-      const nombre=p.nombre||'Parada sin nombre';
-      const refugio=p.refugio? 'Sí':'No';
-      const formLink=`${GOOGLE_FORM_URL}${encodeURIComponent(id)}`;
-      l.bindPopup(`<strong>${nombre}</strong><br>ID: ${id}<br>Refugio: ${refugio}<br><a href="${formLink}" target="_blank">Agregar comentario ➜</a>`);
-    }
-   });
-   gj.addTo(layer);
-   // Añadimos al buscador todas las features de esta capa
-   searchLayer.addLayer(gj);
-  })
-  .catch(err=>console.error('Error cargando',url,err));
+// 3. Estilo genérico de punto
+function styleStop(color){
+  return {radius:6, fillColor:color, color:'#fff', weight:1, fillOpacity:0.9};
 }
 
-addGeoLayer(ALL_STOPS_GEOJSON,allStopsLayer,'#2A93D5');
-addGeoLayer(SHELTER_STOPS_GEOJSON,shelterStopsLayer,'#28B463');
-allStopsLayer.addTo(map); // visible por defecto
+// 4. Función reusable para cargar un GeoJSON
+function addGeoLayer(url, layer, color){
+  fetch(url)
+  .then(r=>r.json())
+  .then(g=>{
+    const gj = L.geoJSON(g, {
+      pointToLayer:(f,ll)=>L.circleMarker(ll,styleStop(color)),
+      onEachFeature:(f,l)=>{
+        const p = f.properties || {};
+        // nombre
+        const nombre = p.Name || 'Parada sin nombre';
+        // id extraído de la descripción (si existe la cadena "Código: <número>")
+        let id = '—';
+        if(p.description){
+          const m = p.description.match(/Código[:\s]*(\d+)/);
+          if(m) id = m[1];
+        }
+        // refugio
+        const refugio = p.Garita && p.Garita.toString().trim()!=='' ? 'Sí' : 'No';
+        // link al formulario con el id pre‑rellenado
+        const formLink = `${GOOGLE_FORM_URL}${encodeURIComponent(id)}`;
+        l.bindPopup(
+          `<strong>${nombre}</strong><br>ID: ${id}<br>Refugio: ${refugio}<br>`+
+          `<a href="${formLink}" target="_blank">Agregar comentario →</a>`
+        );
+        // indexar para la búsqueda
+        l.featureName = nombre;
+      }
+    });
+    gj.addTo(layer);
+    layer.addTo(map);
+    // Añadimos al index de búsqueda
+    searchControl.indexLayer(gj);
+  });
+}
 
-// 3. Buscador global (sobre ambas capas)
-const searchLayer=new L.LayerGroup();
-new L.Control.Search({
-  layer:searchLayer,
-  propertyName:'nombre',
-  zoom:17,
-  textPlaceholder:'Buscar parada…',
-  hideMarkerOnCollapse:true
-}).addTo(map);
+// 5. Cargamos las dos capas
+addGeoLayer(ALL_STOPS_GEOJSON, allStopsLayer, '#2A93D5');
+addGeoLayer(SHELTER_STOPS_GEOJSON, shelterStopsLayer, '#3BB273');
+
+// 6. Buscador
+const searchControl = new L.Control.Search({
+  layer: L.layerGroup(),           // se llenará dinámicamente
+  propertyName: 'featureName',     // campo ficticio que creamos arriba
+  zoom: 17,
+  marker: false,
+  initial: false,
+  textPlaceholder: 'Buscar parada…'
+});
+searchControl.addTo(map);
 </script>
 </body>
 </html>
